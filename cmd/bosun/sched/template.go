@@ -367,3 +367,19 @@ func (c *Context) HTTPGet(u string) string {
 	}
 	return string(body)
 }
+
+func (c *Context) HTTPPost(u, t, d string) string {
+	resp, err := http.Post(u, t, bytes.NewBufferString(d))
+	if err != nil {
+		return err.Error()
+	}
+	if resp.StatusCode >= 300 {
+		return fmt.Sprintf("%v: returned %v", u, resp.Status)
+	}
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return err.Error()
+	}
+	return string(body)
+}
