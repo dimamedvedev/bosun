@@ -1,6 +1,9 @@
 package collectors
 
 import (
+	"fmt"
+	"strings"
+
 	"bosun.org/_third_party/github.com/StackExchange/wmi"
 	"bosun.org/metadata"
 	"bosun.org/opentsdb"
@@ -12,10 +15,42 @@ func init() {
 	}
 	c.init = wmiInit(c, func() interface{} { return &[]Win32_PerfRawData_MSSQLSERVER_SQLServerGeneralStatistics{} }, `WHERE Name <> '_Total'`, &sqlQuery)
 	collectors = append(collectors, c)
+
+	c_replica_db := &IntervalCollector{
+		F: c_mssql_replica_db,
+	}
+	//c_replica_db.init = wmiInit(c, func() interface{} { return &[]Win32_PerfRawData_MSSQLSERVER_SQLServerDatabaseReplica{} }, `WHERE Name <> '_Total'`, &sqlAGDBQuery)
+	c_replica_db.init = func() {
+		var dst []Win32_PerfRawData_MSSQLSERVER_SQLServerDatabaseReplica
+		sqlAGDBQuery = wmi.CreateQuery(&dst, `WHERE Name <> '_Total'`)
+		c.Enable = func() bool {
+			err := queryWmi(sqlAGDBQuery, &dst)
+			fmt.Printf("enabling c_mssql_replica_db returned: %v\n", err)
+			return false //err == nil
+		}
+	}
+	collectors = append(collectors, c_replica_db)
+
+	c_replica_server := &IntervalCollector{
+		F: c_mssql_replica_server,
+	}
+	//c_replica_server.init = wmiInit(c, func() interface{} { return &[]Win32_PerfRawData_MSSQLSERVER_SQLServerAvailabilityReplica{} }, `WHERE Name <> '_Total'`, &sqlAGQuery)
+	c_replica_server.init = func() {
+		var dst []Win32_PerfRawData_MSSQLSERVER_SQLServerAvailabilityReplica
+		sqlAGQuery = wmi.CreateQuery(&dst, `WHERE Name <> '_Total'`)
+		c.Enable = func() bool {
+			err := queryWmi(sqlAGQuery, &dst)
+			fmt.Printf("enabling c_mssql_replica_server returned: %v\n", err)
+			return true //err == nil
+		}
+	}
+	collectors = append(collectors, c_replica_server)
 }
 
 var (
-	sqlQuery string
+	sqlQuery     string
+	sqlAGDBQuery string
+	sqlAGQuery   string
 )
 
 func c_mssql() (opentsdb.MultiDataPoint, error) {
@@ -283,4 +318,114 @@ type Win32_PerfRawData_MSSQLSERVER_SQLServerDatabases struct {
 	TrackedtransactionsPersec     uint64
 	TransactionsPersec            uint64
 	WriteTransactionsPersec       uint64
+}
+
+func c_mssql_replica_db() (opentsdb.MultiDataPoint, error) {
+	var dst []Win32_PerfRawData_MSSQLSERVER_SQLServerDatabaseReplica
+	var q = wmi.CreateQuery(&dst, "WHERE Name <> '_Total'")
+	err := queryWmi(q, &dst)
+	if err != nil {
+		return nil, err
+	}
+	var md opentsdb.MultiDataPoint
+	for _, v := range dst {
+		tags := opentsdb.TagSet{"db": v.Name}
+		//see http://technet.microsoft.com/en-us/library/dn135338%28v=sql.110%29.aspx
+		Add(&md, "mssql.replica.bytes_db", v.FileBytesReceivedPersec, opentsdb.TagSet{"db": v.Name, "type": "filestream_received"}, metadata.Counter, metadata.BytesPerSecond, descMSSQLReplicaFileBytesReceivedPersec)
+		Add(&md, "mssql.replica.bytes_db", v.LogBytesReceivedPersec, opentsdb.TagSet{"db": v.Name, "type": "log_received"}, metadata.Counter, metadata.BytesPerSecond, descMSSQLReplicaLogBytesReceivedPersec)
+		Add(&md, "mssql.replica.bytes_db", v.RedoneBytesPersec, opentsdb.TagSet{"db": v.Name, "type": "log_redone"}, metadata.Counter, metadata.BytesPerSecond, descMSSQLReplicaRedoneBytesPersec)
+		Add(&md, "mssql.replica.mirrored_transactions", v.MirroredWriteTransactionsPersec, tags, metadata.Counter, metadata.PerSecond, descMSSQLReplicaMirroredWriteTransactionsPersec)
+		Add(&md, "mssql.replica.redo_blocked", v.RedoblockedPersec, tags, metadata.Counter, metadata.PerSecond, descMSSQLReplicaRedoblockedPersec)
+		Add(&md, "mssql.replica.delay", v.TransactionDelay, opentsdb.TagSet{"db": v.Name, "type": "transaction"}, metadata.Counter, metadata.MilliSecond, descMSSQLReplicaTransactionDelay)
+		Add(&md, "mssql.replica.recovery", v.LogSendQueue*1024, opentsdb.TagSet{"db": v.Name, "type": "sending"}, metadata.Gauge, metadata.Bytes, descMSSQLReplicaLogSendQueue)
+		Add(&md, "mssql.replica.recovery", v.RecoveryQueue*1024, opentsdb.TagSet{"db": v.Name, "type": "received"}, metadata.Gauge, metadata.Bytes, descMSSQLReplicaRecoveryQueue)
+		Add(&md, "mssql.replica.recovery", v.RedoBytesRemaining*1024, opentsdb.TagSet{"db": v.Name, "type": "redo"}, metadata.Gauge, metadata.Bytes, descMSSQLReplicaRedoBytesRemaining)
+		Add(&md, "mssql.replica.recovery", v.TotalLogrequiringundo*1024, opentsdb.TagSet{"db": v.Name, "type": "undo_total"}, metadata.Gauge, metadata.Bytes, descMSSQLReplicaTotalLogrequiringundo)
+		Add(&md, "mssql.replica.recovery", v.Logremainingforundo*1024, opentsdb.TagSet{"db": v.Name, "type": "undo_remaining"}, metadata.Gauge, metadata.Bytes, descMSSQLReplicaLogremainingforundo)
+	}
+	return md, nil
+}
+
+const (
+	descMSSQLReplicaFileBytesReceivedPersec         = "Amount of filestream data received by the availability replica for the database"
+	descMSSQLReplicaLogBytesReceivedPersec          = "Amount of logs received by the availability replica for the database"
+	descMSSQLReplicaLogremainingforundo             = "The amount of log in bytes remaining to finish the undo phase."
+	descMSSQLReplicaLogSendQueue                    = "Amount of logs in bytes that is waiting to be send to the database replica"
+	descMSSQLReplicaMirroredWriteTransactionsPersec = "Number of transactions which wrote to the mirrored database in the last second, that waited for log to be sent to the mirror."
+	descMSSQLReplicaRecoveryQueue                   = "Total number of hardened log in bytes that is waiting to be redone on the secondary"
+	descMSSQLReplicaRedoblockedPersec               = "Number of times redo gets blocked in the last second"
+	descMSSQLReplicaRedoBytesRemaining              = "The amount of log in bytes remaining to be redone to finish the reverting phase."
+	descMSSQLReplicaRedoneBytesPersec               = "Amount of log records redone in the last second to catch up the database replica"
+	descMSSQLReplicaTotalLogrequiringundo           = "The amount of log in bytes that need to be undone."
+	descMSSQLReplicaTransactionDelay                = "Number of milliseconds transaction termination waited for acknowledgement per second."
+)
+
+type Win32_PerfRawData_MSSQLSERVER_SQLServerDatabaseReplica struct {
+	FileBytesReceivedPersec         uint64
+	LogBytesReceivedPersec          uint64
+	Logremainingforundo             uint64
+	LogSendQueue                    uint64
+	MirroredWriteTransactionsPersec uint64
+	Name                            string
+	RecoveryQueue                   uint64
+	RedoblockedPersec               uint64
+	RedoBytesRemaining              uint64
+	RedoneBytesPersec               uint64
+	TotalLogrequiringundo           uint64
+	TransactionDelay                uint64
+}
+
+func c_mssql_replica_server() (opentsdb.MultiDataPoint, error) {
+	var dst []Win32_PerfRawData_MSSQLSERVER_SQLServerAvailabilityReplica
+	var q = wmi.CreateQuery(&dst, "WHERE Name <> '_Total'")
+	err := queryWmi(q, &dst)
+	if err != nil {
+		return nil, err
+	}
+	var md opentsdb.MultiDataPoint
+	for _, v := range dst {
+		//split name into AvailibilityGroup and Destination. Name is in 'Group:Destination' format
+		s := strings.Split(v.Name, ":")
+		if len(s) != 2 {
+			return nil, fmt.Errorf("Invalid Availibility Group Name: '%s'", v.Name)
+		}
+		//see http://technet.microsoft.com/en-us/library/ff878472(v=sql.110).aspx
+		//also https://livedemo.customers.na.apm.ibmserviceengage.com/help/index.jsp?topic=%2Fcom.ibm.koq.doc%2Fattr_koqadbst.htm
+		Add(&md, "mssql.replica.bytes_ag", v.BytesReceivedfromReplicaPersec, opentsdb.TagSet{"group": s[0], "destination": s[1], "type": "received"}, metadata.Counter, metadata.BytesPerSecond, descMSSQLReplicaBytesReceivedfromReplicaPersec)
+		Add(&md, "mssql.replica.bytes_ag", v.BytesSenttoReplicaPersec, opentsdb.TagSet{"group": s[0], "destination": s[1], "type": "sent_replica"}, metadata.Counter, metadata.BytesPerSecond, descMSSQLReplicaBytesSenttoReplicaPersec)
+		Add(&md, "mssql.replica.bytes_ag", v.BytesSenttoTransportPersec, opentsdb.TagSet{"group": s[0], "destination": s[1], "type": "sent_transport"}, metadata.Counter, metadata.BytesPerSecond, descMSSQLReplicaBytesSenttoTransportPersec)
+		Add(&md, "mssql.replica.delay", v.FlowControlTimemsPersec, opentsdb.TagSet{"group": s[0], "destination": s[1], "type": "flow_control"}, metadata.Counter, metadata.MilliSecond, descMSSQLReplicaFlowControlTimemsPersec)
+		Add(&md, "mssql.replica.messages", v.FlowControlPersec, opentsdb.TagSet{"group": s[0], "destination": s[1], "type": "flow_control"}, metadata.Counter, metadata.PerSecond, descMSSQLReplicaFlowControlPersec)
+		Add(&md, "mssql.replica.messages", v.ReceivesfromReplicaPersec, opentsdb.TagSet{"group": s[0], "destination": s[1], "type": "received"}, metadata.Counter, metadata.PerSecond, descMSSQLReplicaReceivesfromReplicaPersec)
+		Add(&md, "mssql.replica.messages", v.ResentMessagesPersec, opentsdb.TagSet{"group": s[0], "destination": s[1], "type": "resent"}, metadata.Counter, metadata.PerSecond, descMSSQLReplicaResentMessagesPersec)
+		Add(&md, "mssql.replica.messages", v.SendstoReplicaPersec, opentsdb.TagSet{"group": s[0], "destination": s[1], "type": "sent_replica"}, metadata.Counter, metadata.PerSecond, descMSSQLReplicaSendstoReplicaPersec)
+		Add(&md, "mssql.replica.messages", v.SendstoTransportPersec, opentsdb.TagSet{"group": s[0], "destination": s[1], "type": "sent_transport"}, metadata.Counter, metadata.PerSecond, descMSSQLReplicaSendstoTransportPersec)
+
+	}
+	return md, nil
+}
+
+const (
+	descMSSQLReplicaBytesReceivedfromReplicaPersec = "Total bytes receieved from the availability replica"
+	descMSSQLReplicaBytesSenttoReplicaPersec       = "Total bytes sent to the availabilty replica"
+	descMSSQLReplicaBytesSenttoTransportPersec     = "Total bytes sent to transport for the availabilty replica"
+	descMSSQLReplicaFlowControlPersec              = "Number of flow control initiated in the last second"
+	descMSSQLReplicaFlowControlTimemsPersec        = "Time in milliseconds messages waited on flow control in the last second"
+	descMSSQLReplicaReceivesfromReplicaPersec      = "Total receives from the availability replica"
+	descMSSQLReplicaResentMessagesPersec           = "Number of messages being resent in the last second"
+	descMSSQLReplicaSendstoReplicaPersec           = "Total sends to the availability replica"
+	descMSSQLReplicaSendstoTransportPersec         = "Total sends to transport for the availability replica"
+)
+
+type Win32_PerfRawData_MSSQLSERVER_SQLServerAvailabilityReplica struct {
+	BytesReceivedfromReplicaPersec uint64
+	BytesSenttoReplicaPersec       uint64
+	BytesSenttoTransportPersec     uint64
+	FlowControlPersec              uint64
+	FlowControlTimemsPersec        uint64
+	Name                           string
+	ReceivesfromReplicaPersec      uint64
+	ResentMessagesPersec           uint64
+	SendstoReplicaPersec           uint64
+	SendstoTransportPersec         uint64
 }
