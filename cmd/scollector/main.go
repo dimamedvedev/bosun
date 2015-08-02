@@ -152,11 +152,12 @@ func main() {
 	for _, r := range conf.Riak {
 		check(collectors.Riak(r.URL))
 	}
-
 	for _, x := range conf.ExtraHop {
 		check(collectors.ExtraHop(x.Host, x.APIKey, x.FilterBy, x.FilterPercent, x.AdditionalMetrics, x.CertificateSubjectMatch, x.CertificateActivityGroup))
 	}
-
+	for _, s := range conf.RunitServices {
+		check(collectors.RunitServices(s.WhiteList, s.BlackList))
+	}
 	if err != nil {
 		slog.Fatal(err)
 	}

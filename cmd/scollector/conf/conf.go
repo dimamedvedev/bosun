@@ -76,6 +76,7 @@ type Conf struct {
 	HadoopHost          string
 	Oracles             []Oracle
 	Fastly              []Fastly
+	RunitServices       []RunitServices
 }
 
 type HAProxy struct {
@@ -226,4 +227,9 @@ type Oracle struct {
 type OracleInstance struct {
 	ConnectionString string
 	Role             string
+}
+
+type RunitServices struct {
+	WhiteList string
+	BlackList string
 }

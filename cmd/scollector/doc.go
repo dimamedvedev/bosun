@@ -370,6 +370,13 @@ ConnectionString and Role, which are the same as using sqlplus.
 	    ConnectionString = "/@localnodevip/sid"
 	    Role = "sysdba"
 
+RunitServices (array of table, keys are WhiteList): processes from runit
+services to monitor. Collector searches for PIDs files in /etc/service and
+
+	# Linux
+	[[RunitServices]]
+	  WhiteList = "redis"
+	  BlackList = ""
 
 Windows
 
