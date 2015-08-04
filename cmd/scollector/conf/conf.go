@@ -43,6 +43,7 @@ type Conf struct {
 	ProcessDotNet []ProcessDotNet
 	HTTPUnit      []HTTPUnit
 	Riak          []Riak
+	RabbitMQ      []RabbitMQ
 }
 
 type HAProxy struct {
@@ -115,5 +116,9 @@ type HTTPUnit struct {
 }
 
 type Riak struct {
+	URL string
+}
+
+type RabbitMQ struct {
 	URL string
 }
